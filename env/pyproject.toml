@@ -107,8 +107,11 @@ constraint-dependencies = [
   "pyzmq<27",
   "matplotlib<3.11",
   "contourpy<1.4",
-  "numba<0.66",
-  "llvmlite<0.48",
+  # llvmlite 0.46+ dropped macosx_x86_64 (Intel-mac) wheels, so on Intel
+  # macs uv falls back to an sdist LLVM build that fails. 0.45.1 is the
+  # last with an Intel-mac cp311 wheel; pin numba to its 0.62 partner.
+  "numba<0.63",
+  "llvmlite<0.46",
   "pillow<13",
   "statsmodels<0.15",
   "numcodecs<0.17",
