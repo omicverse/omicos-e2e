@@ -42,7 +42,7 @@ jobs:
           - { name: linux-x64, os: ubuntu-latest }
           - { name: linux-arm64, os: ubuntu-24.04-arm }
           - { name: darwin-arm64, os: macos-latest }
-          - { name: darwin-x64, os: macos-13 }
+          - { name: darwin-x64, os: macos-15-intel }
           - { name: win-x64, os: windows-latest }
           - { name: win-arm64, os: windows-11-arm }
     steps:
@@ -83,9 +83,14 @@ jobs:
         shell: bash
         run: |
           uv run python - <<'PY'
-          import omicverse as ov, scanpy as sc, anndata, anndataoom
+          import omicverse as ov, scanpy as sc, anndata
           print("omicverse", ov.__version__)
           print("scanpy", sc.__version__)
+          try:
+              import anndataoom  # noqa: F401
+              print("anndataoom OK (rust OOM backend available)")
+          except ImportError:
+              print("anndataoom not installed (expected on Windows)")
           print("imports OK")
           PY
 

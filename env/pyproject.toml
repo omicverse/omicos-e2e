@@ -50,7 +50,10 @@ dependencies = [
   # this dep the rust backend raises ImportError and the user has to
   # pip-install at run time, which the single_cell_preprocessor agent
   # routinely needs out of the box.
-  "anndataoom",
+  # Scoped off Windows: no win wheel, and its sdist build fails (maturin
+  # → cmake → HDF5 static-lib build panics). omicverse imports fine
+  # without it; only the rust OOM backend is unavailable on Windows.
+  "anndataoom; sys_platform != 'win32'",
 
   # Office-document IO — backs the `office-tools` skill in omicos-admin
   # so the writer / analyst agents can produce .docx manuscripts,
