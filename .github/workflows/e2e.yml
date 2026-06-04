@@ -18,9 +18,13 @@ on:
         required: false
         default: "latest"
   schedule:
-    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
-  # Let omicos-core's publish workflow kick this off after a release:
-  #   gh api repos/omicverse/omicos-e2e/dispatches -f event_type=npm-published
+    # Daily poll. The `gate` job below only lets the matrix run when a NEW
+    # @omicverse/omicos was published in the last ~26 h — so a normal day
+    # is just one cheap version check, zero wasted 6-platform runs.
+    - cron: "0 6 * * *"
+  # Optional instant path: omicos-core's publish workflow can fire this
+  # via repository_dispatch (needs a cross-org PAT). The daily poll above
+  # is the zero-token fallback, so this secret is NOT required.
   repository_dispatch:
     types: [npm-published]
 
@@ -32,8 +36,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Zero-token "is there a new version?" gate. Always runs the matrix for
+  # manual / repository_dispatch triggers; for the daily schedule it only
+  # proceeds when @omicverse/omicos was (re)published recently. Stateless
+  # — compares npm's last-publish time to now, so no secret / no stored
+  # cursor needed.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - id: decide
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "trigger=${{ github.event_name }} → run"
+            exit 0
+          fi
+          mod="$(npm view @omicverse/omicos time.modified 2>/dev/null || true)"
+          if [ -z "$mod" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "no publish-time info → run to be safe"
+            exit 0
+          fi
+          age_h="$(python3 -c "import datetime as dt; m=dt.datetime.fromisoformat('$mod'.replace('Z','+00:00')); print((dt.datetime.now(dt.timezone.utc)-m).total_seconds()/3600)")"
+          echo "latest @omicverse/omicos published $mod (${age_h} h ago)"
+          if awk "BEGIN{exit !(${age_h} < 26)}"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; echo "→ new version, run"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "→ no new version, skip"
+          fi
+
   e2e:
     name: ${{ matrix.name }}
+    needs: gate
+    if: ${{ needs.gate.outputs.run == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -104,14 +143,17 @@ jobs:
 
   summary:
     name: e2e summary
-    needs: e2e
+    needs: [gate, e2e]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Gate on hard checks
         run: |
-          # The e2e job's matrix uses fail-fast:false; this gate fails the
-          # run if ANY platform failed its hard steps (install/sync/import).
+          if [ "${{ needs.e2e.result }}" = "skipped" ]; then
+            echo "no new @omicverse/omicos version since last poll — matrix skipped"; exit 0
+          fi
+          # matrix uses fail-fast:false; fail the run if ANY platform failed
+          # its hard steps (install / env setup / doctor).
           if [ "${{ contains(needs.e2e.result, 'failure') }}" = "true" ]; then
             echo "::error::one or more platforms failed the omicos e2e"; exit 1
           fi
