@@ -46,8 +46,9 @@ jobs:
           - { name: win-x64, os: windows-latest }
           - { name: win-arm64, os: windows-11-arm }
     steps:
-      - uses: actions/checkout@v4
-
+      # No checkout / no vendored recipe needed — the env recipe is baked
+      # into the omicos binary; the test only consumes the published npm
+      # package.
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -65,48 +66,30 @@ jobs:
         shell: bash
         run: omicos --help
 
-      - uses: astral-sh/setup-uv@v6
-        with:
-          python-version: "3.11"
-
-      # 3. Build the bundled kernel env from the SAME recipe omicos ships.
-      #    This is the per-platform "env config is OK" gate — it catches
-      #    any dependency that lacks a wheel for this os/arch.
-      - name: Build kernel env (uv sync, base / no GPU)
-        working-directory: env
+      # 3. ONE-CLICK env setup — the real first-run bootstrap baked into
+      #    the binary: auto-installs uv if needed, then syncs the embedded
+      #    recipe into ~/.omicos/env. This is exactly what a user hits on
+      #    first run, AND the per-platform "env config is OK" gate (it
+      #    catches any dep without a wheel for this os/arch).
+      - name: One-click env setup (omicos env setup --yes)
         shell: bash
-        run: uv sync --no-progress
+        run: omicos env setup --yes
 
-      # 4. The kernel env imports the scientific stack (no torch needed).
-      - name: Kernel env imports omicverse / scanpy / anndata
-        working-directory: env
+      # 4. The bootstrapped env is functional — omicverse importable.
+      - name: Env doctor — omicverse present
         shell: bash
         run: |
-          uv run python - <<'PY'
-          import omicverse as ov, scanpy as sc, anndata
-          print("omicverse", ov.__version__)
-          print("scanpy", sc.__version__)
-          try:
-              import anndataoom  # noqa: F401
-              print("anndataoom OK (rust OOM backend available)")
-          except ImportError:
-              print("anndataoom not installed (expected on Windows)")
-          print("imports OK")
-          PY
+          omicos env doctor
+          omicos env doctor 2>&1 | grep -i omicverse | grep -qi present \
+            || { echo "::error::omicverse missing after env setup"; exit 1; }
 
-      # 5. omicos starts and spawns the shared kernel from our env.
-      #    Best-effort (the serve contract may evolve) — does not fail the
-      #    job, but surfaces a warning if the kernel-spawn log is missing.
-      - name: omicos serve spawns the kernel from the env
-        working-directory: env
+      # 5. omicos starts and spawns the shared kernel from the env that
+      #    `env setup` just provisioned (resolved via .kernel_choice).
+      #    Best-effort.
+      - name: omicos serve spawns the kernel
         shell: bash
         continue-on-error: true
         run: |
-          set -x
-          if [ -x ".venv/bin/python" ]; then PY="$PWD/.venv/bin/python";
-          else PY="$PWD/.venv/Scripts/python.exe"; fi
-          export OMICOS_KERNEL_PYTHON="$PY"
-          export OMICOS_ENV_DIR="$PWD"
           omicos serve --host 127.0.0.1 --port 8917 > serve.log 2>&1 &
           pid=$!
           ok=0
@@ -117,7 +100,7 @@ jobs:
           done
           echo "----- serve.log (tail) -----"; tail -n 40 serve.log || true
           kill "$pid" 2>/dev/null || true
-          if [ "$ok" = "1" ]; then echo "omicos serve started + kernel spawned"; else echo "::warning::omicos serve did not log a kernel-spawn/listening line"; fi
+          if [ "$ok" = "1" ]; then echo "omicos serve started + kernel spawned"; else echo "::warning::serve did not log a kernel-spawn/listening line"; fi
 
   summary:
     name: e2e summary
